@@ -1,0 +1,31 @@
+# Python stuff
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project-specific secrets (CRITICAL)
+credentials/
+*.enc
+*.json
+*.cookies
+*.log
+
+# Project-specific data
+database/*.db
+export/
+*.xlsx
+*.csv
+*.txt
+!requirements.txt
+!README.txt
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+
+# OS stuff
+.DS_Store
+Thumbs.db

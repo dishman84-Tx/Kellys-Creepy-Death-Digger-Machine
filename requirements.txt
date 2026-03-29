@@ -1,0 +1,17 @@
+PyQt6
+PyQt6-WebEngine
+requests
+aiohttp
+beautifulsoup4
+sqlalchemy
+openpyxl
+pandas
+apscheduler
+python-dotenv
+pyinstaller
+lxml
+fake-useragent
+keyring
+cryptography
+playwright
+nodriver

@@ -1,0 +1,17 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+    <!-- Gravestone Shape -->
+    <path d="M 48 220 V 80 C 48 40 88 20 128 20 C 168 20 208 40 208 80 V 220 H 48 Z" fill="#7f8c8d" stroke="#2c3e50" stroke-width="8" />
+    
+    <!-- Decorative "RIP" Text -->
+    <text x="128" y="110" font-family="Serif" font-size="40" font-weight="bold" fill="#2c3e50" text-anchor="middle">RIP</text>
+    
+    <!-- Decorative Cross -->
+    <line x1="128" y1="130" x2="128" y2="180" stroke="#2c3e50" stroke-width="6" stroke-linecap="round" />
+    <line x1="108" y1="150" x2="148" y2="150" stroke="#2c3e50" stroke-width="6" stroke-linecap="round" />
+    
+    <!-- Base of Grave -->
+    <rect x="30" y="220" width="196" height="20" rx="5" fill="#95a5a6" stroke="#2c3e50" stroke-width="6" />
+    
+    <!-- Ground / Grass -->
+    <path d="M 10 240 Q 60 230 128 240 Q 190 250 246 240 L 246 256 L 10 256 Z" fill="#27ae60" />
+</svg>
