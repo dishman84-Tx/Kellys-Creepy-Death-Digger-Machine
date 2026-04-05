@@ -23,6 +23,7 @@ class GoogleNewsScraper(BaseScraper):
         
         all_found = []
         for q in queries:
+            if getattr(self, 'cancel_requested', False): break
             params = {"q": q.strip(), "hl": "en-US", "gl": "US", "ceid": "US:en"}
             try:
                 response = self.make_request(self.rss_url, params=params)

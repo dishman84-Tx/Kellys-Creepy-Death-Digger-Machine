@@ -6,6 +6,7 @@ from PyQt6.QtCore import pyqtSignal, QDate, Qt
 class SearchPanel(QWidget):
     # Signals
     search_requested = pyqtSignal(dict)
+    bulk_search_requested = pyqtSignal(list)
     cancel_requested = pyqtSignal()
     clear_results_requested = pyqtSignal()
     local_search_requested = pyqtSignal(str)
@@ -115,6 +116,11 @@ class SearchPanel(QWidget):
         self.btn_search = QPushButton("🔍 SEARCH ALL")
         self.btn_search.setMinimumHeight(45)
         self.btn_search.clicked.connect(self.on_search_clicked)
+
+        self.btn_bulk = QPushButton("📂 BULK SEARCH (CSV/XLSX)")
+        self.btn_bulk.setMinimumHeight(45)
+        self.btn_bulk.setStyleSheet("background-color: #2980b9; color: white;")
+        self.btn_bulk.clicked.connect(self.on_bulk_clicked)
         
         self.btn_cancel = QPushButton("🛑 CANCEL SEARCH")
         self.btn_cancel.setMinimumHeight(45)
@@ -131,11 +137,34 @@ class SearchPanel(QWidget):
         self.btn_save.clicked.connect(self.save_to_db_requested.emit)
         
         btn_layout.addWidget(self.btn_search)
+        btn_layout.addWidget(self.btn_bulk)
         btn_layout.addWidget(self.btn_cancel)
         btn_layout.addWidget(self.btn_clear)
         btn_layout.addWidget(self.btn_save)
         
         self.main_layout.addWidget(self.button_container)
+
+    def on_bulk_clicked(self):
+        from ui.bulk_import_dialog import BulkImportDialog
+        dialog = BulkImportDialog(self)
+        if dialog.exec():
+            # Add common search params (sources, dates) to each person
+            bulk_data = []
+            sources = [s.text() for s in self.sources if s.isChecked()]
+            date_f = self.date_from.date().toString(Qt.DateFormat.ISODate)
+            date_t = self.date_to.date().toString(Qt.DateFormat.ISODate)
+            
+            for person in dialog.people_data:
+                p = person.copy()
+                p.update({
+                    "sources": sources,
+                    "date_from": date_f,
+                    "date_to": date_t,
+                    "keywords": self.keywords.text()
+                })
+                bulk_data.append(p)
+            
+            self.bulk_search_requested.emit(bulk_data)
 
     def on_history_changed(self, index):
         if index <= 0: return

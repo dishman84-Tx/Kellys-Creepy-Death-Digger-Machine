@@ -2,6 +2,8 @@ import sys
 import os
 import threading
 import traceback
+import time
+import random
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QSplitter, QStatusBar, QMenuBar, QMenu, QMessageBox,
                              QProgressBar, QLabel)
@@ -23,6 +25,7 @@ from scrapers.google_news_scraper import GoogleNewsScraper
 from utils.deduplicator import deduplicate
 from utils.logger import logger
 from utils.settings_manager import load_settings
+from utils.normalizer import parse_date
 
 # NICKNAME MAPPING FOR SMART SEARCH
 NICKNAMES = {
@@ -94,6 +97,7 @@ class MainWindow(QMainWindow):
 
     def connect_signals(self):
         self.search_panel.search_requested.connect(self.run_search)
+        self.search_panel.bulk_search_requested.connect(self.run_bulk_search)
         self.search_panel.cancel_requested.connect(self.request_cancel)
         self.search_panel.clear_results_requested.connect(self.clear_all_results)
         self.search_panel.local_search_requested.connect(self.run_local_search)
@@ -116,101 +120,134 @@ class MainWindow(QMainWindow):
     def run_search(self, params):
         self.cancel_requested = False
         self.status_label.setText("Searching..."); self.progress_bar.setValue(0); self.progress_bar.setVisible(True); self.results_table.clear_results()
-        
-        # STAY ON TOP during search so Undertaker remains visible
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.show()
-        
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint); self.show()
         self.reaper_loader.start_loading()
-        self.search_panel.btn_search.setVisible(False)
-        self.search_panel.btn_cancel.setVisible(True)
-        self.search_panel.btn_cancel.setEnabled(True)
-        self.search_panel.btn_cancel.setText("🛑 CANCEL SEARCH")
-        
+        self.search_panel.btn_search.setVisible(False); self.search_panel.btn_bulk.setVisible(False)
+        self.search_panel.btn_cancel.setVisible(True); self.search_panel.btn_cancel.setEnabled(True); self.search_panel.btn_cancel.setText("🛑 CANCEL SEARCH")
         threading.Thread(target=self._search_thread, args=(params,), daemon=True).start()
 
+    def run_bulk_search(self, bulk_params_list):
+        self.cancel_requested = False
+        self.status_label.setText(f"Bulk Search: 0/{len(bulk_params_list)} people"); self.progress_bar.setValue(0); self.progress_bar.setVisible(True); self.results_table.clear_results()
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint); self.show()
+        self.reaper_loader.start_loading()
+        self.search_panel.btn_search.setVisible(False); self.search_panel.btn_bulk.setVisible(False)
+        self.search_panel.btn_cancel.setVisible(True); self.search_panel.btn_cancel.setEnabled(True); self.search_panel.btn_cancel.setText("🛑 CANCEL SEARCH")
+        threading.Thread(target=self._bulk_search_thread, args=(bulk_params_list,), daemon=True).start()
+
     def _search_thread(self, params):
-        from utils.logger import logger as thread_log
         try:
-            all_results = []
-            enabled = list(dict.fromkeys([s for s in params.get("sources", []) if s in self.settings.get("enabled_sources", [])]))
-            if not enabled: return
-
-            for i, name in enumerate(enabled):
-                if self.cancel_requested:
-                    thread_log.info("Search cancelled by user.")
-                    break
-                    
-                scraper = self.scrapers.get(name)
-                if not scraper: continue
-                QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, f"Querying {name}..."))
-                try:
-                    found = scraper.search(params['first_name'], params['last_name'], params['city'], params['state'], params['date_from'], params['date_to'])
-                    if found: all_results.extend(found)
-                    thread_log.info(f"SCRAPER DONE: {name} found {len(found)}")
-                except Exception as e:
-                    thread_log.error(f"SCRAPER ERROR: {name}: {e}")
-                QMetaObject.invokeMethod(self.progress_bar, "setValue", Qt.ConnectionType.QueuedConnection, Q_ARG(int, int(((i+1)/len(enabled))*100)))
-            
-            unique_results = deduplicate(all_results)
-            
-            # --- SMART AI-GRADE RELEVANCE FILTER ---
-            fname = params['first_name'].lower().strip()
-            lname = params['last_name'].lower().strip()
-            city_filter = params.get('city', '').lower().strip()
-            d_from, d_to = params.get('date_from'), params.get('date_to')
-            s_filter = params.get('state')
-            
-            allowed_fnames = [fname] + NICKNAMES.get(fname, [])
-            
-            filtered = []
-            for rec in unique_results:
-                full_name = rec.get('full_name', '').lower()
-                rd = rec.get('date_of_death')
-                rs = rec.get('state', '').upper()
-                rc = rec.get('city', '').lower()
-                
-                # 1. NAME MATCH
-                name_match = (any(n in full_name for n in allowed_fnames) and lname in full_name)
-                if not name_match: continue
-                
-                # 2. DATE MATCH
-                if rd and (d_from or d_to):
-                    from utils.normalizer import parse_date
-                    df_dt = parse_date(d_from) if isinstance(d_from, str) else d_from
-                    dt_dt = parse_date(d_to) if isinstance(d_to, str) else d_to
-                    if df_dt and rd < df_dt: continue
-                    if dt_dt and rd > dt_dt: continue
-                # We no longer 'continue' if rd is missing. 
-                # If there's no date, we let it through.
-                
-                # 3. STATE MATCH (Relaxed)
-                if s_filter and s_filter != "All":
-                    target_state = s_filter.upper()
-                    if rs and rs != target_state:
-                        # Only discard if we have a state and it DEFINITELY doesn't match
-                        continue
-                
-                # 4. CITY MATCH (Relaxed)
-                if city_filter:
-                    if rc and city_filter not in rc:
-                        # Only discard if we have a city and it DEFINITELY doesn't match
-                        continue
-                
-                filtered.append(rec)
-            
-            self.current_results = filtered
-            thread_log.info(f"FILTERED: {len(unique_results)} raw down to {len(filtered)} relevant results.")
-
-            if self.db_manager and not self.cancel_requested:
-                try: self.db_manager.save_search_history(params, len(filtered)); QMetaObject.invokeMethod(self, "refresh_search_history", Qt.ConnectionType.QueuedConnection)
-                except: pass
-
+            results = self._perform_single_search(params)
+            self.current_results = results
         except Exception as e:
-            try: thread_log.critical(f"SEARCH THREAD ERROR: {e}")
-            except: pass
+            logger.critical(f"SEARCH THREAD ERROR: {e}")
         finally:
             QMetaObject.invokeMethod(self, "_finalize_search", Qt.ConnectionType.QueuedConnection)
+
+    def _bulk_search_thread(self, bulk_params_list):
+        try:
+            all_bulk_results = []
+            total_people = len(bulk_params_list)
+            
+            for idx, params in enumerate(bulk_params_list):
+                if self.cancel_requested: break
+                
+                QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, 
+                                         Q_ARG(str, f"Searching person {idx+1}/{total_people}: {params['first_name']} {params['last_name']}"))
+                
+                person_results = self._perform_single_search(params)
+                all_bulk_results.extend(person_results)
+                
+                QMetaObject.invokeMethod(self.progress_bar, "setValue", Qt.ConnectionType.QueuedConnection, 
+                                         Q_ARG(int, int(((idx+1)/total_people)*100)))
+                
+                # Small delay between people to avoid bot detection
+                if idx < total_people - 1:
+                    time.sleep(2)
+            
+            self.current_results = deduplicate(all_bulk_results)
+            logger.info(f"BULK SEARCH DONE: Found {len(self.current_results)} total unique records.")
+            
+        except Exception as e:
+            logger.critical(f"BULK SEARCH THREAD ERROR: {e}")
+        finally:
+            QMetaObject.invokeMethod(self, "_finalize_search", Qt.ConnectionType.QueuedConnection)
+
+    def _perform_single_search(self, params):
+        all_found = []
+        enabled = [s for s in params.get("sources", []) if s in self.settings.get("enabled_sources", [])]
+        if not enabled: return []
+
+        # 1. ENSURE GOOGLE SEARCH GOES FIRST (As requested by user)
+        # Re-order list so "Google News" is always the first attempt if enabled
+        if "Google News" in enabled:
+            enabled.remove("Google News")
+            enabled.insert(0, "Google News")
+
+        target_first = params['first_name'].lower().strip()
+        target_last = params['last_name'].lower().strip()
+        target_full = f"{target_first} {target_last}"
+
+        from difflib import SequenceMatcher
+
+        for name in enabled:
+            if self.cancel_requested: break
+            scraper = self.scrapers.get(name)
+            if not scraper: continue
+            
+            try:
+                found = scraper.search(params['first_name'], params['last_name'], params['city'], params['state'], params['date_from'], params['date_to'])
+                if not found: continue
+                
+                # Apply filter to results from this scraper
+                filtered_for_this_source = self._apply_relevance_filter(found, params)
+                all_found.extend(filtered_for_this_source)
+                
+                # 2. CHECK FOR 80% PROBABILITY MATCH (EARLY EXIT)
+                # If we found matches in this scraper (Google News first), check if any are high-confidence
+                for rec in filtered_for_this_source:
+                    rec_full_name = rec.get('full_name', '').lower().strip()
+                    # Calculate similarity ratio
+                    similarity = SequenceMatcher(None, target_full, rec_full_name).ratio()
+                    
+                    if similarity >= 0.80:
+                        logger.info(f"HIGH CONFIDENCE MATCH ({int(similarity*100)}%): Found {rec_full_name} via {name}. Exiting early for this person.")
+                        return all_found # Exit search for this person early
+                        
+            except Exception as e:
+                logger.error(f"SCRAPER ERROR: {name}: {e}")
+        
+        return deduplicate(all_found)
+
+    def _apply_relevance_filter(self, results, params):
+        fname = params['first_name'].lower().strip()
+        lname = params['last_name'].lower().strip()
+        city_filter = params.get('city', '').lower().strip()
+        d_from, d_to = params.get('date_from'), params.get('date_to')
+        s_filter = params.get('state')
+        
+        allowed_fnames = [fname] + NICKNAMES.get(fname, [])
+        filtered = []
+        
+        for rec in results:
+            full_name = rec.get('full_name', '').lower()
+            rd = rec.get('date_of_death')
+            rs = rec.get('state', '').upper()
+            rc = rec.get('city', '').lower()
+            
+            if not (any(n in full_name for n in allowed_fnames) and lname in full_name): continue
+            
+            if rd and (d_from or d_to):
+                df_dt = parse_date(d_from) if isinstance(d_from, str) else d_from
+                dt_dt = parse_date(d_to) if isinstance(d_to, str) else d_to
+                if df_dt and rd < df_dt: continue
+                if dt_dt and rd > dt_dt: continue
+            
+            if s_filter and s_filter != "All" and rs and rs != s_filter.upper(): continue
+            if city_filter and rc and city_filter not in rc: continue
+            
+            filtered.append(rec)
+        return filtered
 
     @pyqtSlot()
     def refresh_search_history(self):
@@ -218,20 +255,11 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _finalize_search(self):
-        # REMOVE stay on top
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
-        self.show()
-        
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint); self.show()
         self.results_table.load_results(self.current_results)
-        self.reaper_loader.stop_loading()
-        self.progress_bar.setVisible(False)
+        self.reaper_loader.stop_loading(); self.progress_bar.setVisible(False)
         self.status_label.setText("Done." if not self.cancel_requested else "Cancelled.")
-        
-        self.search_panel.btn_cancel.setVisible(False)
-        self.search_panel.btn_search.setVisible(True)
-        self.search_panel.btn_search.setEnabled(True)
-        self.search_panel.btn_search.setText("🔍 SEARCH ALL")
-        
+        self.search_panel.btn_cancel.setVisible(False); self.search_panel.btn_search.setVisible(True); self.search_panel.btn_bulk.setVisible(True)
         if not self.current_results and not self.cancel_requested: 
             QMessageBox.information(self, "No Results", "No matches found.")
 
